@@ -1,0 +1,30 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="MAIN" Id="{7ae0092a-fc1a-440a-825f-fb9b030d15c1}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	nPosition : DINT := 60000;
+	Yaxis : FB_XAxis;
+	Xaxis : FB_Yaxis;
+	bBool : BOOL := FALSE;
+	FB_Button : FB_Button;
+	FB_LongPress : FB_LongPress;
+	FB_Reset : TC_RESTART;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[Yaxis(bMotorOn := FB_Button.bMotorOn);
+Xaxis(bToken := Yaxis.bYstart, FlipProcess := FB_Button.FlipProcess);
+FB_Button(ProcessFinished := Xaxis.bProcessFinished);
+FB_LongPress();
+FB_Reset(RESTART := FB_LongPress.bReset);]]></ST>
+    </Implementation>
+    <LineIds Name="MAIN">
+      <LineId Id="306" Count="0" />
+      <LineId Id="317" Count="0" />
+      <LineId Id="336" Count="0" />
+      <LineId Id="348" Count="0" />
+      <LineId Id="347" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

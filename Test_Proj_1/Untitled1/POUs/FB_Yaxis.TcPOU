@@ -1,0 +1,237 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_Yaxis" Id="{4c8f4b31-a324-414c-a6a7-864ef855eec6}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK PUBLIC FB_Yaxis
+VAR_INPUT
+	bToken : BOOL;
+	FlipProcess : BOOL; 
+END_VAR
+
+VAR
+	nMoveCount : DINT := 60000; //Position of Linear Motor
+	fbTon : TON := (PT :=T#5S); // Timer for scanning in QR 
+	Enable_Prog_Functions : BOOL := TRUE; (* Start demo *)
+    state : INT; (*-10: connection lost, -20/-21: Error, 100-199 demo application, 200: idle state*)
+    
+	CommunicationError : BOOL; (* No Communication to XENAX*)	
+    ValidConCnt : INT; (*CyclicIn.valid toggles somtetimes. So we believe the CyclicIn.valid only after some time*)
+	
+	  (*Function blocks required for operation*)
+  instJS_MC_Init 					: JS_MC_Init;
+  instJS_MC_CyclicIn 				: JS_MC_CyclicIn;
+  instJS_MC_CyclicOut 			: JS_MC_CyclicOut;
+  instJS_MC_Power 				: JS_MC_Power;
+  instJS_MC_Reference 			: JS_MC_Reference;
+  instJS_MC_Stop 					: JS_MC_Stop;
+  instJS_MC_Reset 				: JS_MC_Reset;
+  
+  (*Additional function blocks for Profile Position*)
+  	instJS_MC_MoveAbsolute 			: JS_MC_MoveAbsolute;
+  	instJS_MC_MoveRelative 			: JS_MC_MoveRelative;
+  	instJS_MC_JogVelocity			: JS_MC_JogVelocity;
+  	instJS_MC_Halt 					: JS_MC_Halt;
+	
+  (*Function blocks for error handling*)
+  	instJS_MC_ReadAxisError			: JS_MC_ReadAxisError;
+  	instJS_MC_AxisErrorCollector	: JS_MC_AxisErrorCollector;
+	
+  (*Optional function blocks*)
+	instJS_MC_ReadActualPosition 	: JS_MC_ReadActualPosition;
+	instJS_MC_ReadStatus 			: JS_MC_ReadStatus;
+	instJS_MC_ReadPSR	 			: JS_MC_ReadPSR;
+	instJS_MC_ReadDigitalOutput 	: JS_MC_ReadDigitalOutput;
+	instJS_MC_ReadDigitalInput 		: JS_MC_ReadDigitalInput;
+	instJS_MC_ReadParameter 		: JS_MC_ReadParameter;
+	instJS_MC_WriteParameter 		: JS_MC_WriteParameter;
+	instJS_MC_WriteDigitalOutput 	: JS_MC_WriteDigitalOutput;
+END_VAR
+
+VAR_OUTPUT 
+	bProcessFinished : BOOL; 
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF NOT instJS_MC_Init.Valid THEN
+    instJS_MC_Init.OperationMode := gcJS_MC.jsmcMODE_PROFILE_POSITION; //PROFILE_POSITION: trajectories are calculated by Xenax Servocontroller. There is no need for an NC Axis, less PLC cpu consumption, but gives less control over driving behavior.
+    instJS_MC_Init();                         // init Axis, only call this funtion once at startup
+    
+    (*reference options*)
+    instJS_MC_Reference.ReferenceMode	:= gcJS_MC.jsmcREFERENCE_MODE_DEFAULT;      (* Motor type specific default reference method*)
+    (*additional reference options for rotative motors*)
+    instJS_MC_Reference.ZMarkSpeedRot := 10000;                                   (* speed during refernce*)
+    instJS_MC_Reference.ReferenceSpeedRot := 0;                                   (* speed for optional refernce to a home sensor, 0 is disabled*)
+    
+    (*enable Error and Status block*)
+    instJS_MC_ReadAxisError.Enable := TRUE;
+    instJS_MC_ReadStatus.Enable := TRUE;
+
+(***********************************************************************************
+ * run loop
+ ***********************************************************************************)
+ELSE
+    instJS_MC_Init(); //recall JS_MC_Init is required for online changes. It recalculates pstAxis output.
+    instJS_MC_CyclicIn(pstAxis := instJS_MC_Init.pstAxis); //Gets cyclic data from EtherCat bus und checks if connection is still valid
+
+	IF instJS_MC_CyclicIn.Error AND state >= 0 THEN (*handle Communication Error e.g. ethernet cable disconnected if not already on error*)
+        state := -10;
+	END_IF
+(*-------------------------------------------------------------------------------------------------------------------------------*)
+
+    CASE state OF 
+    (*Power Up sequence----------------------------------------------------------------------------------------------------------*)
+	0:	(*enable instJS_MC_CyclicIn*)
+        IF Enable_Prog_Functions THEN
+            instJS_MC_CyclicIn.Enable := TRUE;
+            ValidConCnt := 0;
+            state := 1;
+        END_IF;
+        
+    1:  (*wait instJS_MC_CyclicIn valid is stable*)
+        IF instJS_MC_CyclicIn.Valid THEN
+            ValidConCnt := ValidConCnt + 1;
+            IF ValidConCnt >= 15 THEN
+                CommunicationError := FALSE;
+                state := 2;
+			END_IF
+		END_IF
+        
+    2:  (* reset erros from previous run*)
+		instJS_MC_Reset.Execute := TRUE;
+		state := 3;        
+	
+	3:  
+    	IF instJS_MC_Reset.Done THEN
+			instJS_MC_Reset.Execute := FALSE;
+			state := 10;
+		END_IF
+							
+	10: (* power on*)
+		instJS_MC_Power.Enable := 1;
+        state := 11;
+        
+    11:
+		IF instJS_MC_Power.Status AND instJS_MC_Power.Valid THEN
+            state := 30;
+		END_IF
+
+	30: (* start reference*)
+		instJS_MC_Reference.Execute := TRUE;
+		state := 31;
+	
+	31:
+		IF instJS_MC_Reference.Done THEN
+			instJS_MC_Reference.Execute := FALSE;
+			state := 100;
+		END_IF
+    (*normal operation of demo application-------------------------------------------------------------------------------------------------------------*)
+	100: (*drive to position 0*)
+		IF nMoveCount < 0 THEN
+			nMoveCount := 60000;
+			bProcessFinished := TRUE;
+		END_IF
+		instJS_MC_MoveAbsolute.Execute := TRUE;
+		instJS_MC_MoveAbsolute.Position := nMoveCount;           //increment
+		nMoveCount := nMoveCount - 20000;
+		instJS_MC_MoveAbsolute.Velocity := 100000;       //increment/s
+		instJS_MC_MoveAbsolute.Acceleration := 1000000; //increment/s^2
+		instJS_MC_MoveAbsolute.Scurve := 50;            //"smoothness" or change of acceleration in %
+		state := 101;
+	
+	101:
+	fbTon(IN := TRUE);
+	IF fbTON.Q THEN
+		fbTON(IN := FALSE);
+		IF instJS_MC_MoveAbsolute.Done THEN
+			instJS_MC_MoveAbsolute.Execute := FALSE;
+			state := 103;
+ 		END_IF
+	END_IF
+	
+	103:
+	bProcessFinished := FlipProcess;
+	IF bToken THEN
+		IF instJS_MC_MoveAbsolute.Done THEN
+			instJS_MC_MoveAbsolute.Execute := FALSE;
+            IF Enable_Prog_Functions THEN
+                	state := 100;   //restart
+ 			END_IF
+    	END_IF
+		bToken := FALSE;
+	END_IF
+	
+    200:(*idle state*)
+        IF Enable_Prog_Functions THEN
+            state := 100;
+        END_IF    
+
+    (*error handling-----------------------------------------------------------------------------------------------------------------------*)
+    -10: (* Communication interrupted, reset variables and try to reconnect*)
+        CommunicationError := TRUE;
+		instJS_MC_CyclicIn.Enable := FALSE;
+        
+        instJS_MC_Reset.Execute := FALSE;
+		instJS_MC_Reference.Execute := FALSE;
+		instJS_MC_Power.Enable := FALSE;
+		instJS_MC_MoveAbsolute.Execute := FALSE;
+        state := 0;
+        
+    -20: (*Axis error during normal operation*)
+        instJS_MC_Reset.Execute := FALSE;
+		instJS_MC_Reference.Execute := FALSE;
+		instJS_MC_Power.Enable := FALSE;
+		instJS_MC_MoveAbsolute.Execute := FALSE;
+
+    END_CASE
+
+	(* Call all JS_MC_Lib function blocks if CyclicIn is Valid-------------------------------------------------------------------------------*)
+    IF instJS_MC_CyclicIn.Valid THEN
+        (*Function blocks required for operation*)
+        instJS_MC_Power( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_Reference( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_Stop( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_Reset( pstAxis := instJS_MC_Init.pstAxis);
+        (*Additional function blocks for Profile Position*)
+        instJS_MC_MoveAbsolute( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_MoveRelative( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_JogVelocity( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_Halt( pstAxis := instJS_MC_Init.pstAxis);
+        (*Function blocks for error handling*)
+        instJS_MC_ReadAxisError( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_AxisErrorCollector( pstAxis := instJS_MC_Init.pstAxis);
+        (*Optional function blocks*)
+        instJS_MC_ReadActualPosition( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_ReadStatus( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_ReadPSR( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_ReadDigitalOutput( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_ReadDigitalInput( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_ReadParameter( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_WriteParameter( pstAxis := instJS_MC_Init.pstAxis);
+        instJS_MC_WriteDigitalOutput( pstAxis := instJS_MC_Init.pstAxis);
+    END_IF
+    //always call cyclic out
+	instJS_MC_CyclicOut( pstAxis := instJS_MC_Init.pstAxis);
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="FB_Yaxis">
+      <LineId Id="240" Count="73" />
+      <LineId Id="416" Count="1" />
+      <LineId Id="466" Count="0" />
+      <LineId Id="418" Count="0" />
+      <LineId Id="314" Count="8" />
+      <LineId Id="413" Count="1" />
+      <LineId Id="412" Count="0" />
+      <LineId Id="323" Count="3" />
+      <LineId Id="415" Count="0" />
+      <LineId Id="336" Count="1" />
+      <LineId Id="472" Count="0" />
+      <LineId Id="339" Count="0" />
+      <LineId Id="341" Count="2" />
+      <LineId Id="347" Count="0" />
+      <LineId Id="349" Count="1" />
+      <LineId Id="411" Count="0" />
+      <LineId Id="351" Count="22" />
+      <LineId Id="379" Count="29" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

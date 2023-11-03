@@ -1,0 +1,54 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_LongPress" Id="{65073088-e608-4819-9920-77a8cf7cacde}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_LongPress
+VAR_OUTPUT
+	bReset : BOOL;
+END_VAR
+
+VAR
+	state : INT := 0;
+	Button AT%I* : BOOL;
+	fbTon : TON := (PT :=T#3S); 
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[CASE state OF
+	0:
+		fbTon(IN := FALSE);
+		IF Button THEN 
+			state := 10;
+		END_IF
+		
+	10:
+		fbTon(IN := TRUE);
+		IF fbTon.Q THEN 
+			IF Button THEN
+				bReset := TRUE;
+			END_IF
+			state := 0;
+		END_IF
+		IF NOT BUTTON THEN 
+			state := 0;
+		END_IF
+		
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="FB_LongPress">
+      <LineId Id="70" Count="1" />
+      <LineId Id="110" Count="0" />
+      <LineId Id="31" Count="0" />
+      <LineId Id="92" Count="2" />
+      <LineId Id="37" Count="0" />
+      <LineId Id="95" Count="0" />
+      <LineId Id="75" Count="0" />
+      <LineId Id="96" Count="0" />
+      <LineId Id="100" Count="1" />
+      <LineId Id="104" Count="0" />
+      <LineId Id="97" Count="0" />
+      <LineId Id="107" Count="2" />
+      <LineId Id="45" Count="0" />
+      <LineId Id="16" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
